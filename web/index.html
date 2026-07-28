@@ -70,7 +70,8 @@
   #info .k { color: var(--dim); }
   #info .v { overflow-wrap: anywhere; }
 
-  #controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+  #controls, #export { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+  #export { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   label.field { display: flex; flex-direction: column; gap: .3rem; font-size: .72rem; color: var(--dim); }
   select, input[type=number] {
     font: inherit;
@@ -82,6 +83,7 @@
     padding: .4rem .55rem;
   }
   input[type=number] { width: 6rem; }
+  input[type=range] { width: 8rem; accent-color: var(--accent); height: 2rem; }
 
   #bar {
     height: 5px;
@@ -98,6 +100,7 @@
   #stats { display: flex; flex-direction: column; gap: .15rem; margin-top: .5rem; font-size: .75rem; color: var(--dim); }
 
   footer { margin-top: 2.5rem; font-size: .75rem; color: var(--dim); border-top: 1px solid var(--line); padding-top: 1rem; }
+  footer p { margin: 0 0 .6rem; }
   code { color: var(--text); }
 </style>
 </head>
@@ -117,9 +120,6 @@
     <label class="field">song
       <select id="song"></select>
     </label>
-    <label class="field">seconds
-      <input id="time" type="number" min="1" max="600" step="1" value="180">
-    </label>
     <label class="field">model
       <select id="model">
         <option value="">from file</option>
@@ -134,9 +134,18 @@
         <option value="ntsc">NTSC</option>
       </select>
     </label>
+    <label class="field">volume
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="0.6">
+    </label>
     <button id="play" class="primary" disabled>Play</button>
     <button id="stop" disabled>Stop</button>
-    <button id="download" hidden>Download WAV</button>
+  </section>
+
+  <section id="export" hidden>
+    <label class="field">export seconds
+      <input id="time" type="number" min="1" max="600" step="1" value="180">
+    </label>
+    <button id="download">Download WAV</button>
   </section>
 
   <div id="bar" hidden><div id="bar-fill"></div></div>
@@ -144,10 +153,12 @@
   <div id="stats" hidden></div>
 
   <footer>
-    Play emulates the tune in a module worker when it has to, and replays what it
-    already has when it can — changing any setting above retires the previous
-    render. Audio starts only after you press a button, because browsers require
-    a gesture before a context may play.
+    <p>Play streams: the emulator runs inside the audio thread and fills each
+    128-frame quantum on demand, so sound starts at once and continues until you
+    stop it. Changing a setting restarts the stream.</p>
+    <p>Download WAV is the other path — it renders a fixed length up front, which
+    is what makes it possible to normalise the level. A stream cannot know its
+    own peak in advance, so use the volume slider for that.</p>
   </footer>
 </main>
 <script type="module" src="./app.js"></script>

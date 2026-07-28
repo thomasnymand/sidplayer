@@ -1,9 +1,9 @@
-// Browser front end. Parses the file on the main thread for immediate feedback,
-// renders in a worker, and plays the result through Web Audio.
+// Browser front end.
 //
-// Rendering is not a step the listener has to think about: Play renders first
-// when the current settings have not been rendered yet, and replays the buffer
-// it already has when they have.
+// Two paths, for two different jobs. Play streams through an AudioWorklet: the
+// emulator runs in the audio thread and sound starts immediately, for as long
+// as you like. Download WAV renders a fixed length in a worker instead, because
+// normalising a level requires knowing the peak, which a stream cannot know.
 
 import { parseSidFile, songUsesCiaTiming, SidFileError } from '../src/sidfile.js';
 import { encodeWav } from '../src/wav.js';
@@ -15,10 +15,12 @@ const ui = {
   file: $('file'),
   info: $('info'),
   controls: $('controls'),
+  export: $('export'),
   song: $('song'),
   time: $('time'),
   model: $('model'),
   clock: $('clock'),
+  volume: $('volume'),
   play: $('play'),
   stop: $('stop'),
   download: $('download'),
@@ -30,15 +32,14 @@ const ui = {
 
 let tune = null;
 let bytes = null;
-let tuneSerial = 0;
-let worker = null;
+
 let audioContext = null;
-let audioBuffer = null;
-let samples = null;
-let renderedKey = null;
-let source = null;
-let playStartedAt = 0;
-let ticker = 0;
+let workletLoaded = false;
+let streamNode = null;
+let gainNode = null;
+let streamHeader = '';
+
+let exporting = false;
 
 const hex = (value, digits = 4) => `$${value.toString(16).toUpperCase().padStart(digits, '0')}`;
 
@@ -52,29 +53,19 @@ function setStatus(message, kind = '') {
   ui.status.className = kind;
 }
 
-const seconds = () => Math.max(1, Math.min(600, Number(ui.time.value) || 180));
-const selectedSong = () => Number(ui.song.value) || (tune ? tune.startSong : 1);
-
-/**
- * Identity of the audio the current settings would produce. A rendered buffer
- * is reusable only while this is unchanged, which is what stops Play from
- * replaying the previous song after the dropdown moves.
- */
-function currentKey() {
-  if (!tune || !audioContext) return null;
-  return [
-    tuneSerial, selectedSong(), seconds(),
-    ui.model.value, ui.clock.value, audioContext.sampleRate,
-  ].join('|');
+function setStats(lines) {
+  ui.stats.innerHTML = lines.map((line) => `<span>${line}</span>`).join('');
+  ui.stats.hidden = lines.length === 0;
 }
 
-const isFresh = () => audioBuffer !== null && renderedKey !== null && renderedKey === currentKey();
+const exportSeconds = () => Math.max(1, Math.min(600, Number(ui.time.value) || 180));
+const selectedSong = () => Number(ui.song.value) || (tune ? tune.startSong : 1);
+const isStreaming = () => streamNode !== null;
 
 function refreshControls() {
-  const rendering = worker !== null;
-  ui.play.disabled = !tune || rendering || source !== null;
-  ui.stop.disabled = !rendering && source === null;
-  ui.download.hidden = !isFresh();
+  ui.play.disabled = !tune || isStreaming() || exporting;
+  ui.stop.disabled = !isStreaming();
+  ui.download.disabled = !tune || exporting;
 }
 
 function showInfo(parsed) {
@@ -104,10 +95,7 @@ function showInfo(parsed) {
 
 function loadTune(raw, label) {
   stop();
-  audioBuffer = null;
-  samples = null;
-  renderedKey = null;
-  ui.stats.hidden = true;
+  setStats([]);
   ui.bar.hidden = true;
 
   try {
@@ -117,6 +105,7 @@ function loadTune(raw, label) {
     bytes = null;
     ui.info.hidden = true;
     ui.controls.hidden = true;
+    ui.export.hidden = true;
     refreshControls();
     setStatus(
       error instanceof SidFileError ? `${label}: ${error.message}` : String(error),
@@ -126,7 +115,6 @@ function loadTune(raw, label) {
   }
 
   bytes = raw;
-  tuneSerial++;
   ui.song.innerHTML = Array.from(
     { length: tune.songs },
     (_, i) => `<option value="${i + 1}">${i + 1}</option>`,
@@ -136,6 +124,7 @@ function loadTune(raw, label) {
 
   showInfo(tune);
   ui.controls.hidden = false;
+  ui.export.hidden = false;
   refreshControls();
   setStatus(`${tune.name || label} loaded — press Play.`);
 }
@@ -151,151 +140,182 @@ function ensureContext() {
   return audioContext;
 }
 
-/** Emulate the tune into an AudioBuffer, then play it. */
-function render(context, key) {
-  worker = new Worker('./render-worker.js', { type: 'module' });
-  const length = seconds();
+/** Settings shared by both the streaming and the offline path. */
+const emulationOptions = () => ({
+  bytes,
+  song: selectedSong(),
+  model: ui.model.value || null,
+  clock: ui.clock.value || null,
+});
 
-  ui.stats.hidden = true;
-  ui.bar.hidden = false;
-  ui.barFill.style.width = '0%';
-  refreshControls();
-  setStatus(`rendering ${formatTime(length)} at ${context.sampleRate} Hz…`);
+// --- streaming -------------------------------------------------------------
 
-  const fail = (message) => {
-    setStatus(message, 'error');
-    ui.bar.hidden = true;
-    if (worker) worker.terminate();
-    worker = null;
-    refreshControls();
-  };
+async function play() {
+  if (!tune || isStreaming()) return;
+  const context = ensureContext();
 
-  worker.onerror = (event) => {
-    // A worker that fails to load at all reports no message, only a bare event.
-    fail(`render worker failed: ${event.message || 'could not load render-worker.js'}`);
-  };
+  if (!context.audioWorklet) {
+    setStatus('this browser has no AudioWorklet; Download WAV still works', 'error');
+    return;
+  }
 
-  worker.onmessage = ({ data }) => {
-    if (data.type === 'progress') {
-      ui.barFill.style.width = `${((data.written / data.total) * 100).toFixed(1)}%`;
-      return;
+  try {
+    if (!workletLoaded) {
+      await context.audioWorklet.addModule('./stream-processor.js');
+      workletLoaded = true;
     }
+  } catch (error) {
+    setStatus(`could not load the audio processor: ${error.message}`, 'error');
+    return;
+  }
+
+  // A second Play may have landed while addModule was in flight.
+  if (isStreaming()) return;
+
+  const node = new AudioWorkletNode(context, 'sid-stream', {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    processorOptions: emulationOptions(),
+  });
+
+  node.onprocessorerror = () => {
+    setStatus('the audio processor crashed', 'error');
+    stop();
+  };
+
+  node.port.onmessage = ({ data }) => {
     if (data.type === 'error') {
-      fail(data.message);
+      setStatus(data.message, 'error');
+      stop();
       return;
     }
-
-    samples = data.samples;
-    audioBuffer = context.createBuffer(1, samples.length, data.sampleRate);
-    audioBuffer.copyToChannel(samples, 0);
-    renderedKey = key;
-
-    const s = data.stats;
-    ui.stats.innerHTML = [
-      `${s.clockName}, ${s.modelName}`,
-      `rendered in ${s.elapsed.toFixed(1)}s (${s.realtimeFactor.toFixed(1)}× realtime)`,
-      `peak ${s.peak.toFixed(3)}, rms ${s.rms.toFixed(3)}, gain ${s.gain.toFixed(2)}`,
-      `${s.playCalls} play calls at ${s.playRate.toFixed(2)} Hz`,
-    ].map((line) => `<span>${line}</span>`).join('');
-    ui.stats.hidden = false;
-
-    worker.terminate();
-    worker = null;
-
-    if (s.cpuJammed) setStatus('the CPU hit an illegal opcode; playing anyway', 'warn');
-    else if (s.peak === 0) setStatus('the rendered output is silent', 'warn');
-
-    startPlayback(context);
+    if (data.type === 'ready') {
+      streamHeader = `${data.clockName}, ${data.modelName}, ${data.sampleRate} Hz`;
+      setStatus('streaming');
+      setStats([streamHeader]);
+      return;
+    }
+    if (data.type === 'status') {
+      setStatus(`playing ${formatTime(data.elapsed)}`);
+      const lines = [
+        streamHeader,
+        `${data.playCalls} play calls at ${data.playRate.toFixed(2)} Hz`,
+      ];
+      lines.push(`audio thread load ${(data.load * 100).toFixed(1)}% of its deadline`);
+      if (data.cpuJammed) lines.push('the CPU hit an illegal opcode');
+      setStats(lines);
+    }
   };
 
-  worker.postMessage({
-    bytes,
-    song: selectedSong(),
-    seconds: length,
-    sampleRate: context.sampleRate,
-    model: ui.model.value || null,
-    clock: ui.clock.value || null,
-    normalize: true,
-    gain: null,
+  gainNode = context.createGain();
+  gainNode.gain.value = Number(ui.volume.value);
+  node.connect(gainNode).connect(context.destination);
+
+  streamNode = node;
+  refreshControls();
+}
+
+function stop() {
+  if (!streamNode) {
+    if (tune) setStatus('ready');
+    refreshControls();
+    return;
+  }
+  // Telling the processor to stop lets it return false and be collected;
+  // disconnecting alone would leave it running silently.
+  streamNode.port.postMessage('stop');
+  streamNode.port.onmessage = null;
+  streamNode.disconnect();
+  if (gainNode) gainNode.disconnect();
+  streamNode = null;
+  gainNode = null;
+  refreshControls();
+  setStatus('ready');
+}
+
+/** Any change to what would be emulated restarts an in-flight stream. */
+function restartIfPlaying() {
+  if (!isStreaming()) return;
+  stop();
+  play();
+}
+
+// --- offline render, for the WAV export ------------------------------------
+
+function renderOffline(context) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker('./render-worker.js', { type: 'module' });
+    const finish = (fn, value) => {
+      worker.terminate();
+      fn(value);
+    };
+
+    worker.onerror = (event) => finish(
+      reject,
+      new Error(event.message || 'could not load render-worker.js'),
+    );
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'progress') {
+        ui.barFill.style.width = `${((data.written / data.total) * 100).toFixed(1)}%`;
+      } else if (data.type === 'error') {
+        finish(reject, new Error(data.message));
+      } else {
+        finish(resolve, data);
+      }
+    };
+
+    worker.postMessage({
+      ...emulationOptions(),
+      seconds: exportSeconds(),
+      sampleRate: context.sampleRate,
+      normalize: true,
+      gain: null,
+    });
   });
 }
 
-function tick() {
-  if (!source || !audioContext) return;
-  const elapsed = audioContext.currentTime - playStartedAt;
-  const total = audioBuffer.duration;
-  ui.barFill.style.width = `${Math.min(100, (elapsed / total) * 100).toFixed(2)}%`;
-  setStatus(`playing ${formatTime(elapsed)} / ${formatTime(total)}`);
-  ticker = requestAnimationFrame(tick);
-}
+async function download() {
+  if (!tune || exporting) return;
+  const context = ensureContext();
+  const length = exportSeconds();
 
-function startPlayback(context) {
-  if (!audioBuffer) return;
+  exporting = true;
+  refreshControls();
+  ui.bar.hidden = false;
+  ui.barFill.style.width = '0%';
+  const wasStreaming = isStreaming();
+  setStatus(`rendering ${formatTime(length)} for export…`);
 
-  source = context.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(context.destination);
-  source.onended = () => {
-    // Fires on natural end and on stop(); either way the UI goes back to idle.
-    cancelAnimationFrame(ticker);
-    source = null;
+  try {
+    const data = await renderOffline(context);
+    const wav = encodeWav(data.samples, data.sampleRate, 1);
+    const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    const link = document.createElement('a');
+    const stem = (tune.name || 'tune').replace(/[^\w.-]+/g, '_');
+    link.href = url;
+    link.download = `${stem}.wav`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    const s = data.stats;
+    setStats([
+      `${s.clockName}, ${s.modelName}`,
+      `exported ${formatTime(length)} in ${s.elapsed.toFixed(1)}s `
+        + `(${s.realtimeFactor.toFixed(1)}× realtime)`,
+      `peak ${s.peak.toFixed(3)}, rms ${s.rms.toFixed(3)}, normalised by ${s.gain.toFixed(2)}`,
+    ]);
+    setStatus(wasStreaming ? 'exported; still playing' : 'exported');
+  } catch (error) {
+    setStatus(`export failed: ${error.message}`, 'error');
+  } finally {
+    exporting = false;
     ui.bar.hidden = true;
     refreshControls();
-    setStatus('ready');
-  };
-  source.start();
-  playStartedAt = context.currentTime;
-
-  ui.bar.hidden = false;
-  refreshControls();
-  ticker = requestAnimationFrame(tick);
-}
-
-/** The one entry point: render if these settings are not rendered yet, then play. */
-function play() {
-  if (!tune || worker) return;
-  const context = ensureContext();
-  const key = currentKey();
-  if (isFresh()) startPlayback(context);
-  else render(context, key);
-}
-
-function stopPlayback() {
-  cancelAnimationFrame(ticker);
-  if (!source) return;
-  source.onended = null;
-  try { source.stop(); } catch { /* already stopped */ }
-  source.disconnect();
-  source = null;
-  ui.bar.hidden = true;
-}
-
-/** Stop cancels playback and an in-flight render alike. */
-function stop() {
-  const wasRendering = worker !== null;
-  if (worker) {
-    worker.terminate();
-    worker = null;
-    ui.bar.hidden = true;
   }
-  stopPlayback();
-  refreshControls();
-  if (wasRendering) setStatus('render cancelled');
-  else if (tune) setStatus('ready');
 }
 
-function download() {
-  if (!samples || !audioBuffer) return;
-  // The worker already folded the gain in, so encode at unity.
-  const wav = encodeWav(samples, audioBuffer.sampleRate, 1);
-  const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
-  const link = document.createElement('a');
-  const stem = (tune.name || 'tune').replace(/[^\w.-]+/g, '_');
-  link.href = url;
-  link.download = `${stem}.wav`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
+// --- wiring ----------------------------------------------------------------
 
 ui.file.addEventListener('change', () => {
   if (ui.file.files[0]) readFile(ui.file.files[0]);
@@ -304,12 +324,14 @@ ui.play.addEventListener('click', play);
 ui.stop.addEventListener('click', stop);
 ui.download.addEventListener('click', download);
 
-// Any setting that changes the audio retires the rendered buffer, so the next
-// Play re-emulates instead of replaying something stale.
-for (const control of [ui.song, ui.time, ui.model, ui.clock]) {
+ui.volume.addEventListener('input', () => {
+  if (gainNode) gainNode.gain.value = Number(ui.volume.value);
+});
+
+for (const control of [ui.song, ui.model, ui.clock]) {
   control.addEventListener('change', () => {
     if (tune) showInfo(tune);
-    refreshControls();
+    restartIfPlaying();
   });
 }
 
@@ -330,7 +352,5 @@ ui.drop.addEventListener('drop', (event) => {
   if (file) readFile(file);
 });
 
-if (!window.Worker || !window.AudioContext) {
-  setStatus('this browser is missing Web Audio or module workers', 'error');
-}
+if (!window.AudioContext) setStatus('this browser has no Web Audio', 'error');
 refreshControls();

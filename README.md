@@ -71,18 +71,48 @@ forty-line static file server with no configuration.
 | Part | File |
 |---|---|
 | Page and controls | `web/index.html`, `web/app.js` |
-| Emulation, off the main thread | `web/render-worker.js` |
+| Emulation in the audio thread, for playback | `web/stream-processor.js` |
+| Emulation in a worker, for the WAV export | `web/render-worker.js` |
 | Static server | `tools/serve.js` |
 
-The tune is emulated in a module worker and the finished buffer is played
-through an `AudioBufferSourceNode`, so the UI never blocks and the audio is
-never at the mercy of a garbage collection pause. Pressing Play renders first
-when the current settings have not been rendered yet, and replays the buffer it
-already has when they have; changing the song, duration, model or clock retires
-the previous render. In Chrome a three minute tune renders in about eight
-seconds, near enough the same speed as under Node.
+### Playback streams
 
-This needs Web Audio and module workers: Chrome, Safari and Firefox 114+.
+Play does not render anything first. `web/stream-processor.js` is an
+`AudioWorkletProcessor` that holds a `SidPlayer` and advances it inside the
+audio render thread, filling each 128 frame quantum as the hardware asks for
+it. Sound starts in about 200 ms and continues until you stop it; there is no
+length to choose and no ceiling to hit.
+
+That thread is a hard realtime context: at 48 kHz a quantum is 2.67 ms of audio,
+and missing that deadline is an audible glitch. So the processor allocates every
+buffer up front and never allocates in `process()`. Emulating 16384 SID cycles
+at a time — about 17 ms of audio, so roughly one quantum in six does the work
+for the next six — measures at around 15% of the deadline on an M-series Mac.
+Emulating 4096 at a time was worse, around 19%, because the resampler's per-call
+overhead is then paid four times as often.
+
+Worth knowing: the audio thread is markedly slower than a worker for the same
+code, about 6x realtime against 21x. The headroom is still comfortable, but it
+is not the headroom a worker benchmark would suggest.
+
+The streamed output is bit for bit identical to the offline renderer's, verified
+by rendering both through an `OfflineAudioContext` and comparing: zero
+difference across 96000 samples. Streaming is the same computation, not an
+approximation of it.
+
+### Export renders
+
+Download WAV takes the other path, rendering a fixed length in a module worker
+at roughly 21x realtime. This is not duplication for its own sake: normalising a
+level requires knowing the peak, and a stream cannot know its own peak in
+advance. The export is normalised the way the CLI normalises; the stream has a
+volume slider instead.
+
+Requirements: Web Audio, module workers, and static `import` inside
+`AudioWorklet`. Verified on Chrome 150. Firefox and Safari are untested — if
+worklet imports fail there, the imports would have to be inlined into
+`stream-processor.js`, which is the one place this project's no-build-step rule
+gets uncomfortable.
 
 ## Notes on accuracy
 
