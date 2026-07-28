@@ -1,10 +1,12 @@
 # sidplay
 
-A simulator for the MOS 6581/8580 SID sound chip, and a command-line player for
-`.sid` music files. Plain JavaScript, ES modules, no dependencies, no build step.
+A simulator for the MOS 6581/8580 SID sound chip, and a player for `.sid` music
+files. Plain JavaScript, ES modules, no dependencies, no build step. It runs on
+the command line and, unchanged, in the browser.
 
 ```
-node sidplay.js Sanxion_Cover.sid
+node sidplay.js Sanxion_Cover.sid   # command line
+npm run web                         # browser, at http://localhost:8080/
 ```
 
 ## What this actually is
@@ -51,6 +53,36 @@ node sidplay.js <file.sid> [options]
 Playback renders the tune to a temporary WAV and hands it to macOS's `afplay`.
 Rendering runs at roughly 25x realtime, so a three minute tune is ready in about
 seven seconds. On other platforms, use `-o` and play the file yourself.
+
+## In the browser
+
+```
+npm run web
+```
+
+Then open <http://localhost:8080/>. Drop a `.sid` file on the page, or load the
+bundled one, and press Play.
+
+Nothing is bundled, transpiled or vendored: the page imports the same `src/`
+modules the CLI does, straight from disk. The only reason a server is needed at
+all is that ES module imports do not work over `file://`; `tools/serve.js` is a
+forty-line static file server with no configuration.
+
+| Part | File |
+|---|---|
+| Page and controls | `web/index.html`, `web/app.js` |
+| Emulation, off the main thread | `web/render-worker.js` |
+| Static server | `tools/serve.js` |
+
+The tune is emulated in a module worker and the finished buffer is played
+through an `AudioBufferSourceNode`, so the UI never blocks and the audio is
+never at the mercy of a garbage collection pause. Pressing Play renders first
+when the current settings have not been rendered yet, and replays the buffer it
+already has when they have; changing the song, duration, model or clock retires
+the previous render. In Chrome a three minute tune renders in about eight
+seconds, near enough the same speed as under Node.
+
+This needs Web Audio and module workers: Chrome, Safari and Firefox 114+.
 
 ## Notes on accuracy
 

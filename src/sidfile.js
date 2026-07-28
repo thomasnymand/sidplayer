@@ -38,6 +38,12 @@ const CP1252_HIGH = [
   '˜', '™', 'š', '›', 'œ', '�', 'ž', 'Ÿ',
 ];
 
+function readAscii(buf, offset, length) {
+  let out = '';
+  for (let i = 0; i < length; i++) out += String.fromCharCode(buf[offset + i]);
+  return out;
+}
+
 function readString(buf, offset, length) {
   let out = '';
   for (let i = 0; i < length; i++) {
@@ -63,22 +69,29 @@ export class SidFileError extends Error {}
 
 /**
  * Parse a .sid file image.
- * @param {Buffer|Uint8Array} bytes raw file contents
+ * @param {ArrayBuffer|Uint8Array} bytes raw file contents; a Node Buffer, a
+ *   typed array from a browser File read, or a bare ArrayBuffer all work
  * @returns {object} decoded tune, including the C64 data image and its load address
  */
 export function parseSidFile(bytes) {
-  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (buf.length < 0x76) {
     throw new SidFileError(`file is too short to be a SID (${buf.length} bytes)`);
   }
 
-  const magic = buf.toString('ascii', 0, 4);
+  // A Node Buffer is usually a window onto a larger pooled ArrayBuffer, so the
+  // view has to be anchored to this array's own slice of it.
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const u16 = (offset) => view.getUint16(offset, false); // header fields are big endian
+  const u32 = (offset) => view.getUint32(offset, false);
+
+  const magic = readAscii(buf, 0, 4);
   if (magic !== 'PSID' && magic !== 'RSID') {
     throw new SidFileError(`not a SID file: expected magic 'PSID' or 'RSID', found '${magic}'`);
   }
   const isRsid = magic === 'RSID';
 
-  const version = buf.readUInt16BE(0x04);
+  const version = u16(0x04);
   if (version < 1 || version > 4) {
     throw new SidFileError(`unsupported SID version ${version} (expected 1-4)`);
   }
@@ -86,7 +99,7 @@ export function parseSidFile(bytes) {
     throw new SidFileError(`RSID requires version 2, 3 or 4, found ${version}`);
   }
 
-  const dataOffset = buf.readUInt16BE(0x06);
+  const dataOffset = u16(0x06);
   const expectedOffset = version === 1 ? 0x76 : 0x7c;
   if (dataOffset !== expectedOffset) {
     throw new SidFileError(
@@ -98,12 +111,12 @@ export function parseSidFile(bytes) {
     throw new SidFileError('dataOffset points past the end of the file');
   }
 
-  const headerLoadAddress = buf.readUInt16BE(0x08);
-  const headerInitAddress = buf.readUInt16BE(0x0a);
-  const playAddress = buf.readUInt16BE(0x0c);
-  const songs = buf.readUInt16BE(0x0e);
-  const rawStartSong = buf.readUInt16BE(0x10);
-  const speed = buf.readUInt32BE(0x12);
+  const headerLoadAddress = u16(0x08);
+  const headerInitAddress = u16(0x0a);
+  const playAddress = u16(0x0c);
+  const songs = u16(0x0e);
+  const rawStartSong = u16(0x10);
+  const speed = u32(0x12);
 
   const name = readString(buf, 0x16, 32);
   const author = readString(buf, 0x36, 32);
@@ -116,7 +129,7 @@ export function parseSidFile(bytes) {
   let secondSidAddress = 0;
   let thirdSidAddress = 0;
   if (version >= 2) {
-    flags = buf.readUInt16BE(0x76);
+    flags = u16(0x76);
     startPage = buf[0x78];
     pageLength = buf[0x79];
     if (version >= 3) secondSidAddress = decodeExtraSidAddress(buf[0x7a]);
@@ -163,7 +176,7 @@ export function parseSidFile(bytes) {
     if (buf.length < dataOffset + 2) {
       throw new SidFileError('file ends before the embedded load address');
     }
-    loadAddress = buf.readUInt16LE(dataOffset);
+    loadAddress = view.getUint16(dataOffset, true); // the one little-endian field
     data = buf.subarray(dataOffset + 2);
   } else {
     loadAddress = headerLoadAddress;

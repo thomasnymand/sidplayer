@@ -1,12 +1,17 @@
 // Minimal 16-bit PCM WAV writer.
 
+/** Write ASCII into a DataView, one byte per character. */
+function writeTag(view, offset, tag) {
+  for (let i = 0; i < tag.length; i++) view.setUint8(offset + i, tag.charCodeAt(i));
+}
+
 /**
  * Encode mono float samples as a RIFF/WAVE file.
  *
  * @param {Float64Array|Float32Array} samples nominally in [-1, 1]
  * @param {number} sampleRate
  * @param {number} [gain] linear gain applied before conversion
- * @returns {Buffer}
+ * @returns {Uint8Array} the complete file; write it out, or wrap it in a Blob
  */
 export function encodeWav(samples, sampleRate, gain = 1) {
   const channels = 1;
@@ -15,30 +20,31 @@ export function encodeWav(samples, sampleRate, gain = 1) {
   const blockAlign = channels * bytesPerSample;
   const dataBytes = samples.length * blockAlign;
 
-  const buffer = Buffer.alloc(44 + dataBytes);
-  buffer.write('RIFF', 0, 'ascii');
-  buffer.writeUInt32LE(36 + dataBytes, 4);
-  buffer.write('WAVE', 8, 'ascii');
-  buffer.write('fmt ', 12, 'ascii');
-  buffer.writeUInt32LE(16, 16);              // PCM header size
-  buffer.writeUInt16LE(1, 20);               // format: PCM
-  buffer.writeUInt16LE(channels, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * blockAlign, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-  buffer.write('data', 36, 'ascii');
-  buffer.writeUInt32LE(dataBytes, 40);
+  const bytes = new Uint8Array(44 + dataBytes);
+  const view = new DataView(bytes.buffer);
+  writeTag(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeTag(view, 8, 'WAVE');
+  writeTag(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);              // PCM header size
+  view.setUint16(20, 1, true);               // format: PCM
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeTag(view, 36, 'data');
+  view.setUint32(40, dataBytes, true);
 
   let offset = 44;
   for (let i = 0; i < samples.length; i++) {
     let value = Math.round(samples[i] * gain * 32767);
     if (value > 32767) value = 32767;
     else if (value < -32768) value = -32768;
-    buffer.writeInt16LE(value, offset);
+    view.setInt16(offset, value, true);
     offset += 2;
   }
-  return buffer;
+  return bytes;
 }
 
 /** Peak absolute value of a sample buffer. */

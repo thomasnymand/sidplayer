@@ -12,6 +12,7 @@
   },
   "scripts": {
     "start": "node sidplay.js Sanxion_Cover.sid",
+    "web": "node tools/serve.js 8080",
     "test": "node test/run.js"
   },
   "license": "MIT",

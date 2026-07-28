@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sidplay — in the browser</title>
+<style>
+  :root {
+    --bg: #14121c;
+    --panel: #1d1a28;
+    --line: #2f2b3f;
+    --text: #ddd8ee;
+    --dim: #8a83a6;
+    --accent: #7d6cff;
+    --warn: #e0b341;
+    --error: #e06a6a;
+  }
+  * { box-sizing: border-box; }
+  /* The display rules below would otherwise win against the hidden attribute. */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 .2rem; letter-spacing: .02em; }
+  h1 span { color: var(--accent); }
+  .lede { color: var(--dim); margin: 0 0 1.75rem; font-size: .85rem; }
+
+  #drop {
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    padding: 1.5rem;
+    text-align: center;
+    transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: #1b1830; }
+  #drop p { margin: 0 0 .9rem; color: var(--dim); font-size: .85rem; }
+
+  button, .filebtn {
+    font: inherit;
+    font-size: .85rem;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .45rem .9rem;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  button:hover:not(:disabled), .filebtn:hover { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { border-color: var(--accent); color: #fff; }
+  .filebtn input { display: none; }
+
+  section { margin-top: 1.5rem; }
+  #info {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: .3rem 1.25rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1rem 1.15rem;
+    font-size: .82rem;
+  }
+  #info .k { color: var(--dim); }
+  #info .v { overflow-wrap: anywhere; }
+
+  #controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+  label.field { display: flex; flex-direction: column; gap: .3rem; font-size: .72rem; color: var(--dim); }
+  select, input[type=number] {
+    font: inherit;
+    font-size: .85rem;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .4rem .55rem;
+  }
+  input[type=number] { width: 6rem; }
+
+  #bar {
+    height: 5px;
+    background: var(--panel);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 1.25rem;
+  }
+  #bar-fill { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+
+  #status { margin-top: .9rem; font-size: .82rem; color: var(--dim); }
+  #status.error { color: var(--error); }
+  #status.warn { color: var(--warn); }
+  #stats { display: flex; flex-direction: column; gap: .15rem; margin-top: .5rem; font-size: .75rem; color: var(--dim); }
+
+  footer { margin-top: 2.5rem; font-size: .75rem; color: var(--dim); border-top: 1px solid var(--line); padding-top: 1rem; }
+  code { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>sid<span>play</span></h1>
+  <p class="lede">The same 6510 CPU, CIA, VIC and SID emulation the CLI runs, driving Web Audio.</p>
+
+  <div id="drop">
+    <p>Drop a <code>.sid</code> file here</p>
+    <label class="filebtn">Choose file<input id="file" type="file" accept=".sid"></label>
+    <button id="sample">Load Lightforce.sid</button>
+  </div>
+
+  <section id="info" hidden></section>
+
+  <section id="controls" hidden>
+    <label class="field">song
+      <select id="song"></select>
+    </label>
+    <label class="field">seconds
+      <input id="time" type="number" min="1" max="600" step="1" value="180">
+    </label>
+    <label class="field">model
+      <select id="model">
+        <option value="">from file</option>
+        <option value="6581">6581</option>
+        <option value="8580">8580</option>
+      </select>
+    </label>
+    <label class="field">clock
+      <select id="clock">
+        <option value="">from file</option>
+        <option value="pal">PAL</option>
+        <option value="ntsc">NTSC</option>
+      </select>
+    </label>
+    <button id="play" class="primary" disabled>Play</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="download" hidden>Download WAV</button>
+  </section>
+
+  <div id="bar" hidden><div id="bar-fill"></div></div>
+  <p id="status">Load a tune to begin.</p>
+  <div id="stats" hidden></div>
+
+  <footer>
+    Play emulates the tune in a module worker when it has to, and replays what it
+    already has when it can — changing any setting above retires the previous
+    render. Audio starts only after you press a button, because browsers require
+    a gesture before a context may play.
+  </footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
