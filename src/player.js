@@ -206,21 +206,12 @@ export class SidPlayer {
    */
   render(sampleCount, onProgress) {
     const result = new Float64Array(sampleCount);
-    // A generous slack lets a single instruction (or interrupt entry) overrun
-    // the chunk boundary without bounds checks in the inner loop.
-    const CHUNK = 16384;
-    const sidBuffer = new Float32Array(CHUNK + 64);
-    const outBuffer = new Float64Array(this.resampler.maxOutput(CHUNK + 64));
-
     let written = 0;
     let lastProgress = 0;
 
-    while (written < sampleCount) {
-      const filled = this.runCycles(CHUNK, sidBuffer);
-      const produced = this.resampler.process(sidBuffer, filled, outBuffer);
-      const take = Math.min(produced, sampleCount - written);
-      result.set(outBuffer.subarray(0, take), written);
-      written += take;
+    for (const chunk of this.chunks(sampleCount)) {
+      result.set(chunk, written);
+      written += chunk.length;
 
       if (onProgress && written - lastProgress > this.sampleRate) {
         lastProgress = written;
@@ -229,6 +220,34 @@ export class SidPlayer {
     }
     if (onProgress) onProgress(sampleCount, sampleCount);
     return result;
+  }
+
+  /**
+   * Produce output samples a chunk at a time, for as long as the caller keeps
+   * asking. This is what playing without rendering first is built on: there is
+   * no buffer to fill and no length to decide in advance.
+   *
+   * The yielded array is a view onto a buffer that is reused on the next
+   * iteration, so copy or write it out before asking for more.
+   *
+   * @param {number} [sampleCount] stop after this many; omit to run forever
+   * @yields {Float64Array} mono samples, nominally in [-1, 1]
+   */
+  * chunks(sampleCount = Infinity) {
+    // A generous slack lets a single instruction (or interrupt entry) overrun
+    // the chunk boundary without bounds checks in the inner loop.
+    const CHUNK = 16384;
+    const sidBuffer = new Float32Array(CHUNK + 64);
+    const outBuffer = new Float64Array(this.resampler.maxOutput(CHUNK + 64));
+
+    let written = 0;
+    while (written < sampleCount) {
+      const filled = this.runCycles(CHUNK, sidBuffer);
+      const produced = this.resampler.process(sidBuffer, filled, outBuffer);
+      const take = Math.min(produced, sampleCount - written);
+      yield outBuffer.subarray(0, take);
+      written += take;
+    }
   }
 
   /**

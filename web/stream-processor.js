@@ -14,9 +14,10 @@ import { SidPlayer } from '../src/player.js';
 
 // SID cycles emulated per step, matching the offline renderer. About 17 ms of
 // audio, so roughly one quantum in six does the work for the following six.
-// Measured on an M-series Mac at 48 kHz that costs around 15% of the audio
-// thread's time; 4096 was tried and came out worse, at around 19%, because the
-// resampler's per-call overhead is then paid four times as often.
+// On an M-series Mac at 48 kHz that costs somewhere between 9% and 20% of the
+// audio thread's time depending on what else the machine is doing; 4096 was
+// tried and measured consistently worse, because the resampler's per-call
+// overhead is then paid four times as often.
 const CHUNK = 16384;
 
 // Quanta between status messages. 64 is roughly six updates a second.

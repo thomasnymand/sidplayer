@@ -36,8 +36,9 @@ at the right point in the audio stream rather than being quantised to a frame.
 node sidplay.js <file.sid> [options]
 
   -s, --song <n>           subsong to play (default: the file's start song)
-  -t, --time <seconds>     how much to render (default: 180)
-  -o, --out <file.wav>     write a WAV file instead of playing
+  -t, --time <seconds>     how much to render (default: 180, 0 for no limit)
+  -o, --out <file.wav>     write a WAV file instead of playing ('-' for stdout)
+  -d, --direct             stream to the audio device as it is emulated
   -r, --rate <hz>          output sample rate (default: 44100)
   -m, --model <6581|8580>  override the SID model
   -c, --clock <pal|ntsc>   override the video standard
@@ -50,9 +51,46 @@ node sidplay.js <file.sid> [options]
       --verbose            report timing, replay rate and per-voice levels
 ```
 
-Playback renders the tune to a temporary WAV and hands it to macOS's `afplay`.
-Rendering runs at roughly 25x realtime, so a three minute tune is ready in about
-seven seconds. On other platforms, use `-o` and play the file yourself.
+By default, playback renders the tune to a temporary WAV and hands it to macOS's
+`afplay`. Rendering runs at roughly 25x realtime, so a three minute tune is
+ready in about seven seconds, and the level can be normalised because the whole
+waveform is there to measure.
+
+### Playing without rendering first
+
+```
+node sidplay.js Lightforce.sid --direct
+```
+
+`--direct` emulates straight into the audio device instead: sound starts
+immediately and, with no `-t`, keeps going until Ctrl-C. It looks for the first
+of `ffplay`, `play` (sox), `pw-play` or `aplay` on PATH. `afplay` cannot be used
+here — it takes a file path and will not read a pipe, which is exactly why the
+default path writes a temporary file.
+
+Nothing throttles the emulator except the pipe. It runs about twenty times
+faster than realtime, so it fills the player's buffer, blocks on backpressure,
+and from then on is paced by the audio device itself. The progress line counts
+what has gone into the pipe, so it leads what you hear by however much the
+player has buffered.
+
+`-o -` writes a WAV to stdout for piping somewhere else, and moves all the
+human-readable output to stderr so it cannot corrupt the stream:
+
+```
+node sidplay.js Lightforce.sid -t 30 -o - | ffplay -i -
+node sidplay.js Lightforce.sid -o - > tune.wav
+```
+
+With `-t 0` the header carries `0xFFFFFFFF` for its lengths, the usual way of
+saying "read until the input ends".
+
+The catch is the level. Normalising means dividing by the peak, and a stream
+cannot know its peak before it has produced the audio, so both streaming modes
+apply a fixed gain of 0.6 instead — enough headroom for the loud tunes, which
+tend to peak near 1.5. Use `--gain` to set it yourself. Streamed audio is
+otherwise identical to rendered audio: `-o -` and `-o file.wav` at the same gain
+produce byte-identical files.
 
 ## In the browser
 
@@ -87,9 +125,10 @@ That thread is a hard realtime context: at 48 kHz a quantum is 2.67 ms of audio,
 and missing that deadline is an audible glitch. So the processor allocates every
 buffer up front and never allocates in `process()`. Emulating 16384 SID cycles
 at a time — about 17 ms of audio, so roughly one quantum in six does the work
-for the next six — measures at around 15% of the deadline on an M-series Mac.
-Emulating 4096 at a time was worse, around 19%, because the resampler's per-call
-overhead is then paid four times as often.
+for the next six — costs between 9% and 20% of the deadline on an M-series Mac,
+depending on what else is running. Emulating 4096 at a time measured
+consistently worse, because the resampler's per-call overhead is then paid four
+times as often.
 
 Worth knowing: the audio thread is markedly slower than a worker for the same
 code, about 6x realtime against 21x. The headroom is still comfortable, but it
