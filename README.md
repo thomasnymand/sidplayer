@@ -60,8 +60,8 @@ seven seconds. On other platforms, use `-o` and play the file yourself.
 npm run web
 ```
 
-Then open <http://localhost:8080/>. Drop a `.sid` file on the page, or load the
-bundled one, and press Play.
+Then open <http://localhost:8080/>, drop a `.sid` file on the page, and press
+Play.
 
 Nothing is bundled, transpiled or vendored: the page imports the same `src/`
 modules the CLI does, straight from disk. The only reason a server is needed at

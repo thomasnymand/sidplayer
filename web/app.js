@@ -13,7 +13,6 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   drop: $('drop'),
   file: $('file'),
-  sample: $('sample'),
   info: $('info'),
   controls: $('controls'),
   song: $('song'),
@@ -143,17 +142,6 @@ function loadTune(raw, label) {
 
 async function readFile(file) {
   loadTune(new Uint8Array(await file.arrayBuffer()), file.name);
-}
-
-async function loadSample() {
-  setStatus('fetching Lightforce.sid…');
-  try {
-    const response = await fetch('../Lightforce.sid');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    loadTune(new Uint8Array(await response.arrayBuffer()), 'Lightforce.sid');
-  } catch (error) {
-    setStatus(`could not fetch the bundled tune: ${error.message}`, 'error');
-  }
 }
 
 function ensureContext() {
@@ -312,7 +300,6 @@ function download() {
 ui.file.addEventListener('change', () => {
   if (ui.file.files[0]) readFile(ui.file.files[0]);
 });
-ui.sample.addEventListener('click', loadSample);
 ui.play.addEventListener('click', play);
 ui.stop.addEventListener('click', stop);
 ui.download.addEventListener('click', download);
