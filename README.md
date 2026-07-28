@@ -219,3 +219,7 @@ to get wrong and matter a lot:
   use `$36`, `$E000` and above use `$35`, otherwise `$34`. The environment also
   needs `$02A6` set (1 for PAL, 0 for NTSC) and CIA 1 timer A preloaded with
   `$4025` (PAL) or `$4295` (NTSC).
+
+---
+
+Built using Claude Opus 5.
