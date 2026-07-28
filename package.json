@@ -1,0 +1,19 @@
+{
+  "name": "sidplay",
+  "version": "1.0.0",
+  "description": "A MOS 6581/8580 SID chip simulator and .sid music player for the command line",
+  "type": "module",
+  "main": "sidplay.js",
+  "bin": {
+    "sidplay": "./sidplay.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node sidplay.js Sanxion_Cover.sid",
+    "test": "node test/run.js"
+  },
+  "license": "MIT",
+  "private": true
+}
